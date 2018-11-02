@@ -32,7 +32,7 @@ set(SRC
 
 add_library(SPIRVCross STATIC 
     ${SRC} ${INCLUDE}
-    readme.md
+    README.md
 )
 
 set_source_files_properties(
