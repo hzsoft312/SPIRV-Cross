@@ -247,9 +247,6 @@ void CompilerReflection::set_format(const std::string &format)
 
 string CompilerReflection::compile()
 {
-	// Force a classic "C" locale, reverts when function returns
-	ClassicLocale classic_locale;
-
 	// Move constructor for this type is broken on GCC 4.9 ...
 	json_stream = std::make_shared<simple_json::Stream>();
 	json_stream->begin_json_object();
@@ -391,6 +388,16 @@ void CompilerReflection::emit_entry_points()
 	auto entries = get_entry_points_and_stages();
 	if (!entries.empty())
 	{
+		// Needed to make output deterministic.
+		sort(begin(entries), end(entries), [](const EntryPoint &a, const EntryPoint &b) -> bool {
+			if (a.execution_model < b.execution_model)
+				return true;
+			else if (a.execution_model > b.execution_model)
+				return false;
+			else
+				return a.name < b.name;
+		});
+
 		json_stream->emit_json_key_array("entryPoints");
 		for (auto &e : entries)
 		{
@@ -475,7 +482,8 @@ void CompilerReflection::emit_resources(const char *tag, const vector<Resource> 
 
 		{
 			bool is_sized_block = is_block && (get_storage_class(res.id) == StorageClassUniform ||
-			                                   get_storage_class(res.id) == StorageClassUniformConstant);
+			                                   get_storage_class(res.id) == StorageClassUniformConstant ||
+			                                   get_storage_class(res.id) == StorageClassStorageBuffer);
 			if (is_sized_block)
 			{
 				uint32_t block_size = uint32_t(get_declared_struct_size(get_type(res.base_type_id)));
