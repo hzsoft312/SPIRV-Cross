@@ -43,7 +43,7 @@ if(SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS)
 endif()
 
 if (CMAKE_COMPILER_IS_GNUCXX OR (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
-	set(spirv-compiler-options ${spirv-compiler-options} -Wall -Wextra -Werror -Wshadow)
+	set(spirv-compiler-options ${spirv-compiler-options} -Wall -Wextra -Werror -Wshadow -fPIC)
 
 	if (SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS)
 		set(spirv-compiler-options ${spirv-compiler-options} -fno-exceptions)
