@@ -207,11 +207,21 @@ def cross_compile_msl(shader, spirv, opt, iterations, paths):
         msl_args.append('--msl-multiview')
     if '.viewfromdev.' in shader:
         msl_args.append('--msl-view-index-from-device-index')
+    if '.dispatchbase.' in shader:
+        msl_args.append('--msl-dispatch-base')
+    if '.dynamic-buffer.' in shader:
+        # Arbitrary for testing purposes.
+        msl_args.append('--msl-dynamic-buffer')
+        msl_args.append('0')
+        msl_args.append('0')
+        msl_args.append('--msl-dynamic-buffer')
+        msl_args.append('1')
+        msl_args.append('2')
 
     subprocess.check_call(msl_args)
 
     if not shader_is_invalid_spirv(msl_path):
-        subprocess.check_call([paths.spirv_val, '--target-env', 'vulkan1.1', spirv_path])
+        subprocess.check_call([paths.spirv_val, '--scalar-block-layout', '--target-env', 'vulkan1.1', spirv_path])
 
     return (spirv_path, msl_path)
 
@@ -312,7 +322,7 @@ def cross_compile_hlsl(shader, spirv, opt, force_no_external_validation, iterati
     subprocess.check_call(hlsl_args)
 
     if not shader_is_invalid_spirv(hlsl_path):
-        subprocess.check_call([paths.spirv_val, '--target-env', 'vulkan1.1', spirv_path])
+        subprocess.check_call([paths.spirv_val, '--scalar-block-layout', '--target-env', 'vulkan1.1', spirv_path])
 
     validate_shader_hlsl(hlsl_path, force_no_external_validation, paths)
     
@@ -366,7 +376,7 @@ def cross_compile(shader, vulkan, spirv, invalid_spirv, eliminate, is_legacy, fl
         subprocess.check_call([paths.spirv_opt, '--skip-validation', '-O', '-o', spirv_path, spirv_path])
 
     if not invalid_spirv:
-        subprocess.check_call([paths.spirv_val, '--target-env', 'vulkan1.1', spirv_path])
+        subprocess.check_call([paths.spirv_val, '--scalar-block-layout', '--target-env', 'vulkan1.1', spirv_path])
 
     extra_args = ['--iterations', str(iterations)]
     if eliminate:
@@ -383,6 +393,8 @@ def cross_compile(shader, vulkan, spirv, invalid_spirv, eliminate, is_legacy, fl
         extra_args += ['--glsl-emit-push-constant-as-ubo']
     if '.line.' in shader:
         extra_args += ['--emit-line-directives']
+    if '.no-samplerless.' in shader:
+        extra_args += ['--vulkan-glsl-disable-ext-samplerless-texture-functions']
 
     spirv_cross_path = paths.spirv_cross
 
