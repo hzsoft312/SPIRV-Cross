@@ -84,7 +84,7 @@ if(SPIRV_CROSS_FORCE_STL_TYPES)
 endif()
 
 if (CMAKE_COMPILER_IS_GNUCXX OR (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
-	set(spirv-compiler-options ${spirv-compiler-options} -Wall -Wextra -Wshadow -fPIC)
+	set(spirv-compiler-options ${spirv-compiler-options} -Wall -Wextra -Wshadow)
 	if (SPIRV_CROSS_MISC_WARNINGS)
 		if (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
 			set(spirv-compiler-options ${spirv-compiler-options} -Wshorten-64-to-32)
