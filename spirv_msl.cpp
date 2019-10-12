@@ -897,7 +897,7 @@ string CompilerMSL::compile()
 	backend.float_literal_suffix = false;
 	backend.uint32_t_literal_suffix = true;
 	backend.int16_t_literal_suffix = "";
-	backend.uint16_t_literal_suffix = "u";
+	backend.uint16_t_literal_suffix = "";
 	backend.basic_int_type = "int";
 	backend.basic_uint_type = "uint";
 	backend.basic_int8_type = "char";
@@ -5773,10 +5773,10 @@ void CompilerMSL::emit_array_copy(const string &lhs, uint32_t rhs_id, StorageCla
 	else
 		add_spv_func_and_recompile(SPVFuncImplArrayCopy);
 
-	bool lhs_thread =
-	    lhs_storage == StorageClassOutput || lhs_storage == StorageClassFunction || lhs_storage == StorageClassGeneric || lhs_storage == StorageClassPrivate;
-	bool rhs_thread =
-	    rhs_storage == StorageClassInput || rhs_storage == StorageClassFunction || rhs_storage == StorageClassGeneric || rhs_storage == StorageClassPrivate;
+	bool lhs_thread = lhs_storage == StorageClassOutput || lhs_storage == StorageClassFunction ||
+	                  lhs_storage == StorageClassGeneric || lhs_storage == StorageClassPrivate;
+	bool rhs_thread = rhs_storage == StorageClassInput || rhs_storage == StorageClassFunction ||
+	                  rhs_storage == StorageClassGeneric || rhs_storage == StorageClassPrivate;
 
 	const char *tag = nullptr;
 	if (lhs_thread && is_constant)
