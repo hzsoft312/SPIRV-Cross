@@ -1336,7 +1336,8 @@ uint32_t CompilerGLSL::type_to_packed_size(const SPIRType &type, const Bitset &f
 }
 
 bool CompilerGLSL::buffer_is_packing_standard(const SPIRType &type, BufferPackingStandard packing,
-                                              uint32_t start_offset, uint32_t end_offset)
+                                              uint32_t *failed_validation_index, uint32_t start_offset,
+                                              uint32_t end_offset)
 {
 	// This is very tricky and error prone, but try to be exhaustive and correct here.
 	// SPIR-V doesn't directly say if we're using std430 or std140.
@@ -1417,18 +1418,28 @@ bool CompilerGLSL::buffer_is_packing_standard(const SPIRType &type, BufferPackin
 			if (!packing_has_flexible_offset(packing))
 			{
 				if (actual_offset != offset) // This cannot be the packing we're looking for.
+				{
+					if (failed_validation_index)
+						*failed_validation_index = i;
 					return false;
+				}
 			}
 			else if ((actual_offset & (alignment - 1)) != 0)
 			{
 				// We still need to verify that alignment rules are observed, even if we have explicit offset.
+				if (failed_validation_index)
+					*failed_validation_index = i;
 				return false;
 			}
 
 			// Verify array stride rules.
 			if (!memb_type.array.empty() && type_to_packed_array_stride(memb_type, member_flags, packing) !=
 			                                    type_struct_member_array_stride(type, i))
+			{
+				if (failed_validation_index)
+					*failed_validation_index = i;
 				return false;
+			}
 
 			// Verify that sub-structs also follow packing rules.
 			// We cannot use enhanced layouts on substructs, so they better be up to spec.
@@ -1437,6 +1448,8 @@ bool CompilerGLSL::buffer_is_packing_standard(const SPIRType &type, BufferPackin
 			if (!memb_type.pointer && !memb_type.member_types.empty() &&
 			    !buffer_is_packing_standard(memb_type, substruct_packing))
 			{
+				if (failed_validation_index)
+					*failed_validation_index = i;
 				return false;
 			}
 		}
@@ -2091,8 +2104,31 @@ void CompilerGLSL::emit_interface_block(const SPIRVariable &var)
 		else
 		{
 			add_resource_name(var.self);
+
+			// Tessellation control and evaluation shaders must have either gl_MaxPatchVertices or unsized arrays for input arrays.
+			// Opt for unsized as it's the more "correct" variant to use.
+			bool control_point_input_array = type.storage == StorageClassInput &&
+			                                 !type.array.empty() && !has_decoration(var.self, DecorationPatch) &&
+			                                 (get_entry_point().model == ExecutionModelTessellationControl ||
+			                                  get_entry_point().model == ExecutionModelTessellationEvaluation);
+
+			uint32_t old_array_size = 0;
+			bool old_array_size_literal = true;
+
+			if (control_point_input_array)
+			{
+				swap(type.array.back(), old_array_size);
+				swap(type.array_size_literal.back(), old_array_size_literal);
+			}
+
 			statement(layout_for_variable(var), to_qualifiers_glsl(var.self),
 			          variable_decl(type, to_name(var.self), var.self), ";");
+
+			if (control_point_input_array)
+			{
+				swap(type.array.back(), old_array_size);
+				swap(type.array_size_literal.back(), old_array_size_literal);
+			}
 
 			// If a StorageClassOutput variable has an initializer, we need to initialize it in main().
 			if (var.storage == StorageClassOutput && var.initializer)
@@ -2465,7 +2501,6 @@ void CompilerGLSL::emit_declared_builtin_block(StorageClass storage, ExecutionMo
 	if (emitted_builtins.get(BuiltInCullDistance))
 		statement("float gl_CullDistance[", cull_distance_size, "];");
 
-	bool tessellation = model == ExecutionModelTessellationEvaluation || model == ExecutionModelTessellationControl;
 	if (builtin_array)
 	{
 		// Make sure the array has a supported name in the code.
@@ -2477,7 +2512,7 @@ void CompilerGLSL::emit_declared_builtin_block(StorageClass storage, ExecutionMo
 		if (model == ExecutionModelTessellationControl && storage == StorageClassOutput)
 			end_scope_decl(join(to_name(block_var->self), "[", get_entry_point().output_vertices, "]"));
 		else
-			end_scope_decl(join(to_name(block_var->self), tessellation ? "[gl_MaxPatchVertices]" : "[]"));
+			end_scope_decl(join(to_name(block_var->self), "[]"));
 	}
 	else
 		end_scope_decl();
@@ -9091,9 +9126,7 @@ void CompilerGLSL::emit_instruction(const Instruction &instruction)
 		auto &arg_type = expression_type(ops[2]);
 		auto func = type_to_glsl_constructor(type);
 
-		// If we're sign-extending or zero-extending, we need to make sure we cast from the correct type.
-		// For truncation, it does not matter, so don't emit useless casts.
-		if (arg_type.width < type.width)
+		if (arg_type.width < type.width || type_is_floating_point(type))
 			emit_unary_func_op_cast(result_type, id, ops[2], func.c_str(), input_type, type.basetype);
 		else
 			emit_unary_func_op(result_type, id, ops[2], func.c_str());
@@ -9453,12 +9486,32 @@ void CompilerGLSL::emit_instruction(const Instruction &instruction)
 		break;
 
 	case OpEmitStreamVertex:
-		statement("EmitStreamVertex();");
+	{
+		if (options.es)
+			SPIRV_CROSS_THROW("Multi-stream geometry shaders not supported in ES.");
+		else if (!options.es && options.version < 400)
+			SPIRV_CROSS_THROW("Multi-stream geometry shaders only supported in GLSL 400.");
+
+		auto stream_expr = to_expression(ops[0]);
+		if (expression_type(ops[0]).basetype != SPIRType::Int)
+			stream_expr = join("int(", stream_expr, ")");
+		statement("EmitStreamVertex(", stream_expr, ");");
 		break;
+	}
 
 	case OpEndStreamPrimitive:
-		statement("EndStreamPrimitive();");
+	{
+		if (options.es)
+			SPIRV_CROSS_THROW("Multi-stream geometry shaders not supported in ES.");
+		else if (!options.es && options.version < 400)
+			SPIRV_CROSS_THROW("Multi-stream geometry shaders only supported in GLSL 400.");
+
+		auto stream_expr = to_expression(ops[0]);
+		if (expression_type(ops[0]).basetype != SPIRType::Int)
+			stream_expr = join("int(", stream_expr, ")");
+		statement("EndStreamPrimitive(", stream_expr, ");");
 		break;
+	}
 
 	// Textures
 	case OpImageSampleExplicitLod:
@@ -9881,7 +9934,12 @@ void CompilerGLSL::emit_instruction(const Instruction &instruction)
 		if (memory == ScopeWorkgroup) // Only need to consider memory within a group
 		{
 			if (semantics == MemorySemanticsWorkgroupMemoryMask)
-				statement("memoryBarrierShared();");
+			{
+				// OpControlBarrier implies a memory barrier for shared memory as well.
+				bool implies_shared_barrier = opcode == OpControlBarrier && execution_scope == ScopeWorkgroup;
+				if (!implies_shared_barrier)
+					statement("memoryBarrierShared();");
+			}
 			else if (semantics != 0)
 				statement("groupMemoryBarrier();");
 		}
@@ -9915,7 +9973,7 @@ void CompilerGLSL::emit_instruction(const Instruction &instruction)
 		else
 		{
 			const uint32_t all_barriers = MemorySemanticsWorkgroupMemoryMask | MemorySemanticsUniformMemoryMask |
-			                              MemorySemanticsImageMemoryMask | MemorySemanticsAtomicCounterMemoryMask;
+			                              MemorySemanticsImageMemoryMask;
 
 			if (semantics & (MemorySemanticsCrossWorkgroupMemoryMask | MemorySemanticsSubgroupMemoryMask))
 			{
@@ -9937,8 +9995,6 @@ void CompilerGLSL::emit_instruction(const Instruction &instruction)
 					statement("memoryBarrierBuffer();");
 				if (semantics & MemorySemanticsImageMemoryMask)
 					statement("memoryBarrierImage();");
-				if (semantics & MemorySemanticsAtomicCounterMemoryMask)
-					statement("memoryBarrierAtomicCounter();");
 			}
 		}
 
@@ -10759,12 +10815,6 @@ uint32_t CompilerGLSL::to_array_size_literal(const SPIRType &type, uint32_t inde
 string CompilerGLSL::to_array_size(const SPIRType &type, uint32_t index)
 {
 	assert(type.array.size() == type.array_size_literal.size());
-
-	// Tessellation control and evaluation shaders must have either gl_MaxPatchVertices or unsized arrays for input arrays.
-	// Opt for unsized as it's the more "correct" variant to use.
-	if (type.storage == StorageClassInput && (get_entry_point().model == ExecutionModelTessellationControl ||
-	                                          get_entry_point().model == ExecutionModelTessellationEvaluation))
-		return "";
 
 	auto &size = type.array[index];
 	if (!type.array_size_literal[index])
@@ -12104,7 +12154,12 @@ void CompilerGLSL::emit_block_chain(SPIRBlock &block)
 
 	SPIRBlock::ContinueBlockType continue_type = SPIRBlock::ContinueNone;
 	if (block.continue_block)
+	{
 		continue_type = continue_block_type(get<SPIRBlock>(block.continue_block));
+		// If we know we cannot emit a loop, mark the block early as a complex loop so we don't force unnecessary recompiles.
+		if (continue_type == SPIRBlock::ComplexLoop)
+			block.complex_continue = true;
+	}
 
 	// If we have loop variables, stop masking out access to the variable now.
 	for (auto var_id : block.loop_variables)
@@ -12754,25 +12809,26 @@ void CompilerGLSL::unroll_array_from_complex_load(uint32_t target_id, uint32_t s
 	auto builtin = BuiltIn(get_decoration(var->self, DecorationBuiltIn));
 	bool is_builtin = is_builtin_variable(*var) && (builtin == BuiltInPointSize || builtin == BuiltInPosition);
 	bool is_tess = is_tessellation_shader();
+	bool is_patch = has_decoration(var->self, DecorationPatch);
 
 	// Tessellation input arrays are special in that they are unsized, so we cannot directly copy from it.
 	// We must unroll the array load.
 	// For builtins, we couldn't catch this case normally,
 	// because this is resolved in the OpAccessChain in most cases.
 	// If we load the entire array, we have no choice but to unroll here.
-	if (is_builtin || is_tess)
+	if (!is_patch && (is_builtin || is_tess))
 	{
 		auto new_expr = join("_", target_id, "_unrolled");
 		statement(variable_decl(type, new_expr, target_id), ";");
 		string array_expr;
-		if (type.array_size_literal.front())
+		if (type.array_size_literal.back())
 		{
-			array_expr = convert_to_string(type.array.front());
-			if (type.array.front() == 0)
+			array_expr = convert_to_string(type.array.back());
+			if (type.array.back() == 0)
 				SPIRV_CROSS_THROW("Cannot unroll an array copy from unsized array.");
 		}
 		else
-			array_expr = to_expression(type.array.front());
+			array_expr = to_expression(type.array.back());
 
 		// The array size might be a specialization constant, so use a for-loop instead.
 		statement("for (int i = 0; i < int(", array_expr, "); i++)");
