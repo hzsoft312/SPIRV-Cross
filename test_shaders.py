@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 
- # Copyright 2015-2019 Arm Limited
- #
- # Licensed under the Apache License, Version 2.0 (the "License");
- # you may not use this file except in compliance with the License.
- # You may obtain a copy of the License at
- #
- #     http://www.apache.org/licenses/LICENSE-2.0
- #
- # Unless required by applicable law or agreed to in writing, software
- # distributed under the License is distributed on an "AS IS" BASIS,
- # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- # See the License for the specific language governing permissions and
- # limitations under the License.
+# Copyright 2015-2020 Arm Limited
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import sys
 import os
@@ -178,7 +178,9 @@ def cross_compile_msl(shader, spirv, opt, iterations, paths):
     spirv_path = create_temporary()
     msl_path = create_temporary(os.path.basename(shader))
 
-    spirv_cmd = [paths.spirv_as, '--target-env', 'vulkan1.1', '-o', spirv_path, shader]
+    spirv_env = 'vulkan1.1spv1.4' if ('.spv14.' in shader) else 'vulkan1.1'
+
+    spirv_cmd = [paths.spirv_as, '--target-env', spirv_env, '-o', spirv_path, shader]
     if '.preserve.' in shader:
         spirv_cmd.append('--preserve-numeric-ids')
 
@@ -224,6 +226,8 @@ def cross_compile_msl(shader, spirv, opt, iterations, paths):
         msl_args.append('2')
         msl_args.append('--msl-discrete-descriptor-set')
         msl_args.append('3')
+    if '.force-active.' in shader:
+        msl_args.append('--msl-force-active-argument-buffer-resources')
     if '.line.' in shader:
         msl_args.append('--emit-line-directives')
     if '.multiview.' in shader:
@@ -240,16 +244,23 @@ def cross_compile_msl(shader, spirv, opt, iterations, paths):
         msl_args.append('--msl-dynamic-buffer')
         msl_args.append('1')
         msl_args.append('2')
+    if '.inline-block.' in shader:
+        # Arbitrary for testing purposes.
+        msl_args.append('--msl-inline-uniform-block')
+        msl_args.append('0')
+        msl_args.append('0')
     if '.device-argument-buffer.' in shader:
         msl_args.append('--msl-device-argument-buffer')
         msl_args.append('0')
         msl_args.append('--msl-device-argument-buffer')
         msl_args.append('1')
+    if '.force-native-array.' in shader:
+        msl_args.append('--msl-force-native-arrays')
 
     subprocess.check_call(msl_args)
 
     if not shader_is_invalid_spirv(msl_path):
-        subprocess.check_call([paths.spirv_val, '--scalar-block-layout', '--target-env', 'vulkan1.1', spirv_path])
+        subprocess.check_call([paths.spirv_val, '--scalar-block-layout', '--target-env', spirv_env, spirv_path])
 
     return (spirv_path, msl_path)
 
@@ -347,6 +358,8 @@ def cross_compile_hlsl(shader, spirv, opt, force_no_external_validation, iterati
     hlsl_args = [spirv_cross_path, '--entry', 'main', '--output', hlsl_path, spirv_path, '--hlsl-enable-compat', '--hlsl', '--shader-model', sm, '--iterations', str(iterations)]
     if '.line.' in shader:
         hlsl_args.append('--emit-line-directives')
+    if '.force-uav.' in shader:
+        hlsl_args.append('--hlsl-force-storage-buffer-as-uav')
     subprocess.check_call(hlsl_args)
 
     if not shader_is_invalid_spirv(hlsl_path):
@@ -388,10 +401,12 @@ def cross_compile(shader, vulkan, spirv, invalid_spirv, eliminate, is_legacy, fl
     spirv_path = create_temporary()
     glsl_path = create_temporary(os.path.basename(shader))
 
+    spirv_env = 'vulkan1.1spv1.4' if ('.spv14.' in shader) else 'vulkan1.1'
+
     if vulkan or spirv:
         vulkan_glsl_path = create_temporary('vk' + os.path.basename(shader))
 
-    spirv_cmd = [paths.spirv_as, '--target-env', 'vulkan1.1', '-o', spirv_path, shader]
+    spirv_cmd = [paths.spirv_as, '--target-env', spirv_env, '-o', spirv_path, shader]
     if '.preserve.' in shader:
         spirv_cmd.append('--preserve-numeric-ids')
 
@@ -404,7 +419,7 @@ def cross_compile(shader, vulkan, spirv, invalid_spirv, eliminate, is_legacy, fl
         subprocess.check_call([paths.spirv_opt, '--skip-validation', '-O', '-o', spirv_path, spirv_path])
 
     if not invalid_spirv:
-        subprocess.check_call([paths.spirv_val, '--scalar-block-layout', '--target-env', 'vulkan1.1', spirv_path])
+        subprocess.check_call([paths.spirv_val, '--scalar-block-layout', '--target-env', spirv_env, spirv_path])
 
     extra_args = ['--iterations', str(iterations)]
     if eliminate:
@@ -423,6 +438,8 @@ def cross_compile(shader, vulkan, spirv, invalid_spirv, eliminate, is_legacy, fl
         extra_args += ['--emit-line-directives']
     if '.no-samplerless.' in shader:
         extra_args += ['--vulkan-glsl-disable-ext-samplerless-texture-functions']
+    if '.no-qualifier-deduction.' in shader:
+        extra_args += ['--disable-storage-image-qualifier-deduction']
 
     spirv_cross_path = paths.spirv_cross
 
